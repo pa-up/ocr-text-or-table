@@ -3,3 +3,7 @@ numpy
 pandas
 deep-translator
 opencv-python-headless==4.7.0.72
+google-api-python-client
+google-auth
+google-auth-httplib2
+google-auth-oauthlib
