@@ -1,98 +1,56 @@
 import streamlit as st
-from asprise_ocr.ocr import *
+from ocr.asprise_ocr import *
+from ocr import assist_ocr
 import pandas as pd
-import base64
 import re
 import numpy as np
+import cv2
 from forms import asprise_ocr_language_options
+from views import easy_st, google_api
 
 
-def st_upload_img_to_path(input_file_path: str = "input_img.jpg"):
-    uploaded_file = st.file_uploader("画像またはPDFをアップロードしてください", type=["jpg", "jpeg", "png"])
-    st.markdown(f"<p><br></p>", unsafe_allow_html=True)
-    if uploaded_file:
-        # アップロードされたファイルをディレクトリに保存
-        with open(input_file_path, "wb") as file:
-            file.write(uploaded_file.getbuffer())
-        return uploaded_file
+def add_rectangle_with_text(input_img_list: list, divide_square_path: str):
+    """
+    リストに格納された画像を文字列が描かれた長方形を挟んで縦に連結する関数
+    parameters :
+        input_img_list (list) : List[np.ndarray , np.ndarray , ...]
+        text (str) : 長方形の内部に描く文字列
+    """
+    def resize_image_with_width(image: np.ndarray, target_width):
+        # 元の画像のサイズを取得
+        height, width = image.shape[:2]
+        # アスペクト比を計算
+        aspect_ratio = height / width
+        # ターゲットの横の長さに基づいてリサイズ
+        target_height = int(aspect_ratio * target_width)
+        resized_image = cv2.resize(image, (target_width, target_height))
+        return resized_image
 
-def df_to_csv_local_url(df: pd.DataFrame , output_csv_path: str = "output.csv"):
-    """ データフレーム型の表をcsv形式でダウンロードできるURLを生成する関数 """
-    # csvの生成＆ローカルディレクトリ上に保存（「path_or_buf」を指定したら、戻り値は「None」）
-    df.to_csv(path_or_buf=output_csv_path, index=False, header=False, encoding='utf-8-sig')
-    # ダウロードできるaタグを生成
-    csv = df.to_csv(index=False, header=False, encoding='utf-8-sig')
-    b64 = base64.b64encode(csv.encode('utf-8-sig')).decode()  # some strings <-> bytes conversions necessary here
-    csv_local_href = f'<a href="data:file/csv;base64,{b64}" download={output_csv_path}>CSVでダウンロード</a>'
-    return csv_local_href
-
-
-def rtf_to_df(rtf_file, text_file):
-    """ rtfファイル内の表をデータフレーム型に変換する関数 """
-    def rtf_to_text(rtf_file, text_file):
-        with open(rtf_file, 'r') as rtf:
-            rtf_content = rtf.read()
-        # RTFコードをプレーンテキストに変換する
-        text_content = rtf_content.replace('\\par', '\n').encode('ascii', 'ignore').decode('ascii')
-        with open(text_file, 'w') as text:
-            text.write(text_content)
-        return text_content
+    result_img_list = []
+    for input_img in input_img_list:
+        # 長方形のサイズと位置を計算
+        height, width, _ = input_img.shape
+        # 長方形の描画
+        divide_square_img = cv2.cvtColor(cv2.imread(divide_square_path) , cv2.COLOR_BGR2RGB)
+        divide_square_img = resize_image_with_width(divide_square_img , width)
+        # 元の画像と長方形を結合
+        result_img = np.vstack((input_img, divide_square_img ))
+        result_img_list.append(result_img)
     
-    def get_cell_text(text , before_end_pos):
-        start_tag , end_tag , digits_pattern = r"\fs" , r"}\cell" , r'^(\d+)'
-        start_index = before_end_pos + len(end_tag)
-        start_pos = text.find(start_tag, start_index)
-        end_pos = text.find(end_tag, start_pos)
-        cell_text = text[start_pos + len(start_tag) : end_pos]
-        match = re.match(digits_pattern, cell_text)
-        first_digits_string = match.group(1)
-        cell_text = cell_text[ len(first_digits_string) + 1 : ]
-        return cell_text , end_pos
-
-    def count_substring(string, substring):
-        count , start = 0 , 0
-        while True:
-            index = string.find(substring, start)
-            if index == -1:
-                break
-            count += 1
-            start = index + len(substring)
-        return count
+    base_size_width = result_img_list[0].shape[1]
+    before_img = result_img_list[0]
+    for loop in range(len(result_img_list)):
+        if loop < len(result_img_list) - 1:
+            current_img = result_img_list[loop + 1]
+            current_img = resize_image_with_width(current_img, base_size_width)
+            completed_result_img = np.vstack((before_img, current_img))
+            before_img = completed_result_img
     
-    # rtfファイルからテキスト形式で取得
-    text_content = rtf_to_text(rtf_file, text_file)
-
-    start_tag , end_tag = r"{\trowd" , r"\row"
-    rtf_rows_elements = []
-    start_index = 0
-    while True:
-        start_pos = text_content.find(start_tag, start_index)
-        if start_pos == -1:
-            break
-        end_pos = text_content.find(end_tag, start_pos)
-        if end_pos == -1:
-            break
-        string_between_tags = text_content[start_pos + len(start_tag) : end_pos]
-        rtf_rows_elements.append(string_between_tags)
-        start_index = end_pos + len(end_tag)
-    # 表全体の行数と列数を取得
-    rows_count = len(rtf_rows_elements)
-    col_tag = r"}\cell"
-    cols_count = count_substring(rtf_rows_elements[0], col_tag)
-    # 各セルの文字列をnumpyに格納
-    table_cells = np.empty( (rows_count , cols_count) , dtype="object")
-    for row in range(rows_count):
-        before_end_pos = 0
-        for col in range(cols_count):
-            table_cells[row , col] , before_end_pos = get_cell_text(rtf_rows_elements[row] , before_end_pos)
-            table_cells[row , col] = table_cells[row , col].replace('\n', '')
-    df = pd.DataFrame(table_cells)
-    return df
+    return completed_result_img
 
 
-
-def main(page_subtitle="<h1>レシートのOCR</h1><p></p>"):
-    """ 表から文字とその座標を認識するモジュール """
+    
+def main(page_subtitle="<h1>表のOCR</h1><p></p>"):
     st.write(f"<h3>{page_subtitle}</h3>" , unsafe_allow_html=True)
 
     # 言語の選択フォーム
@@ -100,33 +58,68 @@ def main(page_subtitle="<h1>レシートのOCR</h1><p></p>"):
     language_parameter = asprise_ocr_language_options[asprise_ocr_language_options[:, 0] == selected_language][0, 1]
 
     input_file_path = "media/img/input_img.jpg"
-    output_rtf_path = "media/rtf/output_ocr.rtf"
-    output_txt_path = "media/txt/output_ocr.txt"
-    output_csv_path = "media/csv/output.csv"
+    output_xml_path = "media/xml/output_ocr.xml"
+    cell_img_base_path = "media/img/cell_img"
+    output_csv_path = "media/csv/table_ocr.csv"
 
     # 画像のアップロードフォーム
-    uploaded_file = st_upload_img_to_path(input_file_path)
-
-    if uploaded_file:
+    input_rgb_img: np.ndarray = easy_st.st_upload_img_to_path(input_file_path)
+    if isinstance(input_rgb_img,  np.ndarray):
         ocr = Ocr()
         ocr.start_engine(language_parameter)   # deu, fra, por, spa - 30以上の言語に対応
-        ocr.recognize(
+        xml_text = ocr.recognize(
             input_file_path,  # 画像ファイルのパス (gif, jpg, pdf, png, tif, etc.)
             OCR_PAGES_ALL,  # 選択されたページの領域座標のインデックス
             -1, -1, -1, -1,  # ページ全体ではなく、ページ上の領域を指定することも可能
             OCR_RECOGNIZE_TYPE_TEXT,  # 認識形式： TEXT、BARCODES、ALLのいずれか
-            OCR_OUTPUT_FORMAT_RTF,  # 出力形式： TEXT or XML or PDF or RTF
-            PROP_RTF_OUTPUT_FILE=output_rtf_path,  # 出力ファイルのパス
+            OCR_OUTPUT_FORMAT_XML,  # 出力形式： TEXT or XML or PDF or RTF
+            # PROP_XML_OUTPUT_FILE=output_xml_path,  # 出力ファイルのパス(TEXT or XML は戻り値で取得)
         )
         ocr.stop_engine()
 
+        # ファイルにXMLデータを書き込む
+        with open(output_xml_path, 'w') as f:
+            f.write(xml_text)
+
         st.markdown(f"<h5>表のOCR結果</h5>", unsafe_allow_html=True)
-        # RTFファイルから表をデータフレーム形式で取得
-        df = rtf_to_df(output_rtf_path, output_txt_path)
-        # データフレームをcsvに変換し、ダウンロードボタンを生成
-        csv_local_href = df_to_csv_local_url(df, output_csv_path)
+        # 表のセルの切り抜き画像を全て取得
+        cells_imgs: np.ndarray  = assist_ocr.xml_to_cells_image(input_rgb_img , output_xml_path)
+        table_rows , table_cols = cells_imgs.shape[0] , cells_imgs.shape[1]
+        # セルごとにOCR
+        cell_number = 0
+        cells_ocr_text = np.empty( (table_rows , table_cols) , dtype="object" )
+        for col in range(table_cols):
+            same_cols_imgs_list = []
+            for row in range(table_rows):
+                # セルの画像を保存
+                cell_img: np.ndarray = cells_imgs[row , col]
+                # 列ごとに表の画像を分割
+                same_cols_imgs_list.append(cell_img)
+                cell_number += 1
+            
+            # 同じ列の画像として連結
+            divide_square_path = "static/img/divide_cell.png"
+            same_cols_imgs: np.ndarray = add_rectangle_with_text(same_cols_imgs_list , divide_square_path)
+            input_same_cols_img_path = f"media/img/cell_{col}.jpg"
+            cv2.imwrite(input_same_cols_img_path, cv2.cvtColor(same_cols_imgs, cv2.COLOR_RGB2BGR))
+
+            # Google APIでOCR実行
+            google_drive_ocr = google_api.ManipulateGoogleDriveAPI()
+            output_same_cols_txt_path = f"media/txt/ocr_{col}.txt"
+            same_cols_ocr_text = google_drive_ocr.drive_ocr(
+                input_file_path = input_same_cols_img_path , output_txt_path = output_same_cols_txt_path ,
+            )
+            same_cols_ocr_text = assist_ocr.remove_pipe_from_string(same_cols_ocr_text)
+            # OCR結果のテキストをセルごとに分解してリストに格納
+            same_cols_ocr_text_list = re.split(r"\d{5,}", same_cols_ocr_text)
+            same_cols_ocr_text_list = [text.strip() for text in same_cols_ocr_text_list if text.strip()]
+            cells_ocr_text[ : , col ] = np.array(same_cols_ocr_text_list)
+        
+        df = pd.DataFrame(cells_ocr_text)
+        csv_local_href = google_api.df_to_csv_local_url(df, output_csv_path)
         st.markdown(csv_local_href , unsafe_allow_html=True)
-        st.write(df)
+        st.write(cells_ocr_text)
+        
 
 
 

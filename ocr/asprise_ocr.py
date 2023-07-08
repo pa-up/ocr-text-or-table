@@ -283,13 +283,13 @@ class Ocr(object):
     def _load_dynamic_lib():
         """Loads dynamic library if it has not been loaded. Skip if already loaded."""
         if Ocr.is_windows():
-            lib_file = "asprise_ocr/lib/aocr_x64.dll"
+            lib_file = "ocr/lib/aocr_x64.dll"
             # lib_file = "aocr.dll"
         if Ocr.is_linux():
-            lib_file = "asprise_ocr/lib/libaocr_x64.so"
+            lib_file = "ocr/lib/libaocr_x64.so"
             # lib_file = "lib/libaocr.so"
         if Ocr.is_mac():
-            lib_file = "asprise_ocr/lib/libaocr_x64.dylib"
+            lib_file = "ocr/lib/libaocr_x64.dylib"
 
         if Ocr.is_windows():
             Ocr._dynamic_lib = ctypes.windll.LoadLibrary(lib_file)
